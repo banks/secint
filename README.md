@@ -11,7 +11,7 @@ token into a new workload (VM, server instance etc) when it is provisioned which
 is enough for that workload to exchange it for some arbitrary other secret data
 like initial TLS certificates or longer-lived tokens.
 
-Production applications are likely to want to use something more fully features
+Production applications are likely to want to use something more fully featured
 like [HashiCorp Vault](https://vaultproject.io) however this is a prototype of
 the simplest thing that could work without dependencies.
 

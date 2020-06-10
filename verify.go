@@ -2,14 +2,15 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
 
-	"github.com/SermoDigital/jose/crypto"
-	"github.com/SermoDigital/jose/jws"
 	"github.com/mitchellh/cli"
+	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 func verifyFactory() (cli.Command, error) {
@@ -60,38 +61,38 @@ func (c *verifyCommand) Run(args []string) int {
 		return 1
 	}
 
-	jwt, err := jws.ParseJWT(tokenBytes)
+	token, err := jwt.ParseSigned(string(tokenBytes))
 	if err != nil {
-		c.ui.Error(fmt.Sprintf("ERROR: failed to parse JWT: %s", err))
+		c.ui.Error(fmt.Sprintf("ERROR: failed to parse JWT: %v", err))
 		return 1
 	}
+
+	var stdClaims jwt.Claims
+	privateClaims := make(map[string]interface{})
 
 	// Verify token
-	if err := jwt.Validate(key, crypto.SigningMethodES256); err != nil {
-		c.ui.Error(fmt.Sprintf("ERROR: failed to verify token: %s", err))
+	if err := token.Claims(key, &stdClaims, &privateClaims); err != nil {
+		c.ui.Error(fmt.Sprintf("ERROR: failed to verify token: %v", err))
 		return 1
 	}
 
-	claims := jwt.Claims()
-
-	id, ok := claims.JWTID()
-	if !ok {
+	if stdClaims.ID == "" {
 		c.ui.Error(fmt.Sprintf("ERROR: no ID in token"))
 		return 1
 	}
 
-	sub, ok := claims.Subject()
-	if !ok {
+	if stdClaims.Subject == "" {
 		c.ui.Error(fmt.Sprintf("ERROR: no subject in token"))
 		return 1
 	}
-	if c.nodeName != "" && c.nodeName != sub {
+
+	if c.nodeName != "" && c.nodeName != stdClaims.Subject {
 		c.ui.Error(fmt.Sprintf("ERROR: token doesn't match expected node name.\n"+
-			"Got %q expect %q", sub, c.nodeName))
+			"Got %q expect %q", stdClaims.Subject, c.nodeName))
 		return 1
 	}
 
-	server, ok := claims.Get("server").(bool)
+	server, ok := privateClaims["server"].(bool)
 	isServer := "NO"
 	if ok && server {
 		isServer = "YES"
@@ -104,8 +105,8 @@ func (c *verifyCommand) Run(args []string) int {
 		c.ui.Output("Server Allowed:     NO")
 	}
 
-	c.ui.Output(fmt.Sprintf("JWT ID            : %s", id))
-	c.ui.Output(fmt.Sprintf("Verified Node Name: %s", sub))
+	c.ui.Output(fmt.Sprintf("JWT ID            : %s", stdClaims.ID))
+	c.ui.Output(fmt.Sprintf("Verified Node Name: %s", stdClaims.Subject))
 	c.ui.Output(fmt.Sprintf("Server Token      : %s", isServer))
 	c.ui.Output("VALID")
 
@@ -118,5 +119,20 @@ func pubKeyFromFile(fileName string) (*ecdsa.PublicKey, error) {
 		return nil, err
 	}
 
-	return crypto.ParseECPublicKeyFromPEM(bs)
+	block, _ := pem.Decode(bs)
+	if block == nil {
+		return nil, fmt.Errorf("No PEM block in file")
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	ecpub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("Parsed public key is not an ECDSA Public Key")
+	}
+
+	return ecpub, nil
 }

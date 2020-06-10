@@ -2,21 +2,27 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
+
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"time"
 
-	"github.com/SermoDigital/jose/crypto"
-	"github.com/SermoDigital/jose/jws"
 	"github.com/hashicorp/go-uuid"
 	"github.com/mitchellh/cli"
+	"gopkg.in/square/go-jose.v2"
+	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 func mintFactory() (cli.Command, error) {
-	return &mintCommand{
+	c := &mintCommand{
 		ui: ui(),
-	}, nil
+	}
+
+	c.init()
+	return c, nil
 }
 
 type mintCommand struct {
@@ -29,24 +35,38 @@ type mintCommand struct {
 	typ         string
 	nodeName    string
 	server      bool
+	issuer      string
+	audience    string
+
+	help string
 }
 
+const mintHelp = `Usage: secint mint [options]
+
+Create a new intro token.
+`
+
 func (c *mintCommand) Help() string {
-	return `Create a new intro token.`
+	return Usage(c.help, nil)
 }
 
 func (c *mintCommand) Synopsis() string {
 	return `Create a new intro token.`
 }
 
-func (c *mintCommand) Run(args []string) int {
+func (c *mintCommand) init() {
 	c.flags = flag.NewFlagSet("", flag.ContinueOnError)
 
 	c.flags.StringVar(&c.privKeyFile, "priv-key", "secint-priv-key.pem", "private key file in PEM format")
 	c.flags.DurationVar(&c.ttl, "ttl", 30*time.Second, "duration the generated token is valid for")
 	c.flags.BoolVar(&c.server, "server", false, "whether this token is for a server.")
 	c.flags.StringVar(&c.nodeName, "node", "", "the name of the node")
+	c.flags.StringVar(&c.issuer, "issuer", "", "the iss claim to embed in the JWT")
+	c.flags.StringVar(&c.audience, "audience", "", "the aud claim to embed in the JWT")
+	c.help = Usage(mintHelp, c.flags)
+}
 
+func (c *mintCommand) Run(args []string) int {
 	if err := c.flags.Parse(args); err != nil {
 		return 1
 	}
@@ -71,30 +91,48 @@ func (c *mintCommand) Run(args []string) int {
 		return 1
 	}
 
-	now := time.Now()
+	var opts jose.SignerOptions
+	opts.WithType("JWT")
 
-	claims := jws.Claims{}
-	claims.SetExpiration(now.Add(c.ttl))
-	claims.SetSubject(c.nodeName)
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: pk}, &opts)
+	if err != nil {
+		c.ui.Error(fmt.Sprintf("Error: failed to create JWT signer: %v", err))
+		return 1
+	}
+
 	id, err := uuid.GenerateUUID()
 	if err != nil {
 		c.ui.Error(fmt.Sprintf("ERROR: failed to generate UUID: %s", err))
 		return 1
 	}
-	claims.SetJWTID(id)
-	if c.server {
-		claims.Set("server", true)
+
+	now := time.Now()
+
+	stdClaims := jwt.Claims{
+		Subject:   c.nodeName,
+		Issuer:    c.issuer,
+		Audience:  jwt.Audience{c.audience},
+		NotBefore: jwt.NewNumericDate(now.Add(-60 * time.Second)),
+		Expiry:    jwt.NewNumericDate(now.Add(c.ttl)),
+		ID:        id,
 	}
 
-	jwt := jws.NewJWT(claims, crypto.SigningMethodES256)
+	privateClaims := make(map[string]interface{})
 
-	b, err := jwt.Serialize(pk)
+	if c.server {
+		privateClaims["server"] = true
+	}
+
+	token, err := jwt.Signed(sig).
+		Claims(stdClaims).
+		Claims(privateClaims).
+		CompactSerialize()
 	if err != nil {
-		c.ui.Error(fmt.Sprintf("ERROR: failed to create token: %s", err))
+		c.ui.Error(fmt.Sprintf("ERROR: failed to create token: %v", err))
 		return 1
 	}
 
-	c.ui.Output(string(b))
+	c.ui.Output(string(token))
 
 	return 0
 }
@@ -105,5 +143,10 @@ func privKeyFromFile(fileName string) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 
-	return crypto.ParseECPrivateKeyFromPEM(bs)
+	block, _ := pem.Decode(bs)
+	if block == nil {
+		return nil, fmt.Errorf("No PEM block in file")
+	}
+
+	return x509.ParseECPrivateKey(block.Bytes)
 }

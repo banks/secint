@@ -14,9 +14,12 @@ import (
 )
 
 func verifyFactory() (cli.Command, error) {
-	return &verifyCommand{
+	c := &verifyCommand{
 		ui: ui(),
-	}, nil
+	}
+
+	c.init()
+	return c, nil
 }
 
 type verifyCommand struct {
@@ -27,23 +30,33 @@ type verifyCommand struct {
 	pubKeyFile string
 	nodeName   string
 	server     bool
+
+	help string
 }
 
+const verifyHelp = `Usage: secint verify [options]
+
+Verify a new intro token from stdin.
+`
+
 func (c *verifyCommand) Help() string {
-	return `Verify an intro token from stdin.`
+	return Usage(c.help, nil)
 }
 
 func (c *verifyCommand) Synopsis() string {
 	return `Verify an intro token from stdin.`
 }
 
-func (c *verifyCommand) Run(args []string) int {
+func (c *verifyCommand) init() {
 	c.flags = flag.NewFlagSet("", flag.ContinueOnError)
 
 	c.flags.StringVar(&c.pubKeyFile, "pub-key", "secint-pub-key.pem", "public key file in PEM format")
 	c.flags.BoolVar(&c.server, "server", false, "whether this token is expected to be for a server.")
 	c.flags.StringVar(&c.nodeName, "node", "", "the name of the node expected.")
+	c.help = Usage(verifyHelp, c.flags)
+}
 
+func (c *verifyCommand) Run(args []string) int {
 	if err := c.flags.Parse(args); err != nil {
 		return 1
 	}

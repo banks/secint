@@ -17,9 +17,12 @@ import (
 )
 
 func mintFactory() (cli.Command, error) {
-	return &mintCommand{
+	c := &mintCommand{
 		ui: ui(),
-	}, nil
+	}
+
+	c.init()
+	return c, nil
 }
 
 type mintCommand struct {
@@ -34,17 +37,24 @@ type mintCommand struct {
 	server      bool
 	issuer      string
 	audience    string
+
+	help string
 }
 
+const mintHelp = `Usage: secint mint [options]
+
+Create a new intro token.
+`
+
 func (c *mintCommand) Help() string {
-	return `Create a new intro token.`
+	return Usage(c.help, nil)
 }
 
 func (c *mintCommand) Synopsis() string {
 	return `Create a new intro token.`
 }
 
-func (c *mintCommand) Run(args []string) int {
+func (c *mintCommand) init() {
 	c.flags = flag.NewFlagSet("", flag.ContinueOnError)
 
 	c.flags.StringVar(&c.privKeyFile, "priv-key", "secint-priv-key.pem", "private key file in PEM format")
@@ -53,7 +63,10 @@ func (c *mintCommand) Run(args []string) int {
 	c.flags.StringVar(&c.nodeName, "node", "", "the name of the node")
 	c.flags.StringVar(&c.issuer, "issuer", "", "the iss claim to embed in the JWT")
 	c.flags.StringVar(&c.audience, "audience", "", "the aud claim to embed in the JWT")
+	c.help = Usage(mintHelp, c.flags)
+}
 
+func (c *mintCommand) Run(args []string) int {
 	if err := c.flags.Parse(args); err != nil {
 		return 1
 	}
